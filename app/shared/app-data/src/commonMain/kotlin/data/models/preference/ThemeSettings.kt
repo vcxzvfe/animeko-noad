@@ -32,6 +32,7 @@ data class ThemeSettings(
     val useDynamicSubjectPageTheme: Boolean = false,
     val seedColorValue: ULong = DefaultSeedColor.value,
     val enableAnimatedGradientSubjectPage: Boolean = true,
+    val enableFrostedGlassEffect: Boolean = false,
     @Suppress("PropertyName") @Transient val _placeholder: Int = 0,
 ) {
     @Transient
