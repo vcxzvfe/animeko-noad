@@ -1,0 +1,58 @@
+From 3d53d6a199927719b55d75c2f4ea0d83d5c5292c Mon Sep 17 00:00:00 2001
+From: vcxzvfe <91271000+vcxzvfe@users.noreply.github.com>
+Date: Fri, 10 Jul 2026 00:00:43 +0200
+Subject: [PATCH] =?UTF-8?q?fix:=20=E8=BF=87=E6=BB=A4=E6=92=AD=E6=94=BE?=
+ =?UTF-8?q?=E9=A1=B5=E7=9B=B8=E5=85=B3=E6=8E=A8=E8=8D=90=E4=B8=AD=E6=9C=8D?=
+ =?UTF-8?q?=E5=8A=A1=E5=99=A8=E4=B8=8B=E5=8F=91=E7=9A=84=E5=B9=BF=E5=91=8A?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+api.animeko.org 的 /v2/subjects/{id}/recommendations 会混入 subjectId=-1、带外链 uri 的广告项, 与首页 RecommendationRepository 的既有过滤规则保持一致。同时禁用更新检查, 防止自编译版被官方包覆盖。
+---
+ .../domain/episode/GetSubjectRecommendationFlowUseCase.kt    | 5 ++++-
+ .../src/commonMain/kotlin/ui/update/UpdateChecker.kt         | 5 +++++
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/app/shared/app-data/src/commonMain/kotlin/domain/episode/GetSubjectRecommendationFlowUseCase.kt b/app/shared/app-data/src/commonMain/kotlin/domain/episode/GetSubjectRecommendationFlowUseCase.kt
+index c9a0f9f..58f5aff 100644
+--- a/app/shared/app-data/src/commonMain/kotlin/domain/episode/GetSubjectRecommendationFlowUseCase.kt
++++ b/app/shared/app-data/src/commonMain/kotlin/domain/episode/GetSubjectRecommendationFlowUseCase.kt
+@@ -32,7 +32,10 @@ fun interface GetSubjectRecommendationUseCase : UseCase {
+ 
+ class GetSubjectRecommendationUseCaseImpl(private val service: SubjectService) : GetSubjectRecommendationUseCase {
+     override suspend fun invoke(subjectId: Int): List<SubjectRecommendation> {
+-        return service.getSubjectRecommendations(subjectId, 15).map {
++        return service.getSubjectRecommendations(subjectId, 15)
++            // 服务器会在推荐流中混入广告 (subjectId <= 0 且带外链 uri), 与首页 RecommendationRepository 一致地过滤掉
++            .filter { it.uri == null && (it.subjectId ?: 0) > 0 }
++            .map {
+             SubjectRecommendation(
+                 subjectId = it.subjectId,
+                 name = it.subjectName,
+diff --git a/app/shared/ui-settings/src/commonMain/kotlin/ui/update/UpdateChecker.kt b/app/shared/ui-settings/src/commonMain/kotlin/ui/update/UpdateChecker.kt
+index 6c07a74..51a62b5 100644
+--- a/app/shared/ui-settings/src/commonMain/kotlin/ui/update/UpdateChecker.kt
++++ b/app/shared/ui-settings/src/commonMain/kotlin/ui/update/UpdateChecker.kt
+@@ -29,6 +29,9 @@ import me.him188.ani.utils.logging.logger
+ import me.him188.ani.utils.platform.currentPlatform
+ 
+ class UpdateChecker {
++    // 自编译版本标记: true 时 checkLatestVersion 恒返回 "无新版本"
++    private val selfBuiltDisableUpdateCheck = true
++
+     /**
+      * 检查是否有更新的版本. 返回最新版本的信息, 或者 `null` 表示没有新版本.
+      */
+@@ -36,6 +39,8 @@ class UpdateChecker {
+         releaseClass: ReleaseClass,
+         currentVersion: String = currentAniBuildConfig.versionName,
+     ): NewVersion? {
++        // 自编译版本: 禁用更新检查, 避免升级回官方包 (更新请从源码重新构建)
++        if (selfBuiltDisableUpdateCheck) return null
+         HttpClient(getPlatformKtorEngine()) {
+             expectSuccess = true
+         }.use { client ->
+-- 
+2.50.1 (Apple Git-155)
+

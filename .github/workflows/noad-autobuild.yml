@@ -1,0 +1,122 @@
+name: noad autobuild
+
+# 定时检查上游 open-ani/animeko 的最新 release；有新版则:
+# 拉 tag -> 套 noad.patch(过滤广告+禁用更新检查) -> 构建 macOS aarch64 dmg -> 发布到本仓库 releases
+on:
+  schedule:
+    - cron: '17 2,8,14,20 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '强制构建指定上游 tag (如 v5.7.1); 留空则取上游最新 release'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM: open-ani/animeko
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.decide.outputs.tag }}
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -eu
+          if [ -n "$FORCE_TAG" ]; then
+            TAG="$FORCE_TAG"
+          else
+            TAG=$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)
+          fi
+          OURS=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name 2>/dev/null || echo "none")
+          echo "upstream: $TAG / ours: $OURS"
+          if [ -n "$FORCE_TAG" ] || [ "${TAG}-noad" != "$OURS" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone upstream tag
+        run: git clone --depth 1 --branch "$TAG" "https://github.com/$UPSTREAM.git" src
+
+      - name: Apply noad patch and align version
+        run: |
+          set -eu
+          cd src
+          git apply --stat --apply ../noad.patch
+          VER="${TAG#v}"
+          sed -i '' "s/^version.name=.*/version.name=$VER/; s/^package.version=.*/package.version=$VER/" gradle.properties
+          grep -E '^(version.name|package.version)' gradle.properties
+
+      - name: Inject dandanplay keys (optional)
+        env:
+          DDP_ID: ${{ secrets.DANDANPLAY_APP_ID }}
+          DDP_SECRET: ${{ secrets.DANDANPLAY_APP_SECRET }}
+        run: |
+          if [ -n "$DDP_ID" ]; then
+            printf 'ani.dandanplay.app.id=%s\nani.dandanplay.app.secret=%s\n' "$DDP_ID" "$DDP_SECRET" >> src/local.properties
+            echo "dandanplay keys injected"
+          else
+            echo "::warning::未配置 DANDANPLAY_APP_ID/SECRET secrets, 此构建的弹弹play弹幕源不可用"
+          fi
+
+      - name: Set up JBR 21 (JCEF, aarch64)
+        run: |
+          curl -fsSL --retry 3 -o jbr.tar.gz "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk_jcef-21.0.8-osx-aarch64-b1038.68.tar.gz"
+          mkdir jbr && tar -xzf jbr.tar.gz -C jbr --strip-components 1
+          echo "JAVA_HOME=$PWD/jbr/Contents/Home" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build release dmg
+        working-directory: src
+        # 托管 macos-15 runner 只有 7GB 内存, 压低堆避免 OOM (官方自托管机用 12g/20g)
+        run: >
+          ./gradlew :app:desktop:packageReleaseDistributionForCurrentOS
+          --stacktrace
+          "-Dorg.gradle.jvmargs=-Xmx3g -Dkotlin.daemon.jvm.options=-Xmx3g"
+          "-Dkotlin.daemon.jvm.options=-Xmx3g"
+
+      - name: Collect artifact
+        run: |
+          set -eu
+          DMG=$(ls src/app/desktop/build/compose/binaries/main-release/dmg/*.dmg | head -1)
+          OUT="ani-${TAG#v}-noad-macos-aarch64.dmg"
+          mv "$DMG" "$OUT"
+          shasum -a 1 "$OUT" > "$OUT.sha1"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${TAG}-noad" "$OUT" "$OUT.sha1" \
+            --title "Ani ${TAG} 去广告版 (macOS aarch64)" \
+            --notes "基于官方 [${TAG}](https://github.com/open-ani/animeko/releases/tag/${TAG})。唯一修改见 [noad.patch](../../blob/noad-ci/noad.patch)：过滤播放页「相关推荐」中服务器下发的广告项，并禁用应用内更新检查。
+
+安装：拖入 Applications 后如提示「无法验证开发者」，执行：
+\`\`\`
+xattr -dr com.apple.quarantine /Applications/Ani.app
+\`\`\`
+或直接用仓库里的 \`install-latest.sh\`（需 gh CLI）。
+
+依据 AGPL-3.0 分发；完整对应源码 = 上游 ${TAG} tag + 本仓库 noad.patch。"
