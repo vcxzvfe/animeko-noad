@@ -109,14 +109,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${TAG}-noad" "$OUT" "$OUT.sha1" \
-            --title "Ani ${TAG} 去广告版 (macOS aarch64)" \
-            --notes "基于官方 [${TAG}](https://github.com/open-ani/animeko/releases/tag/${TAG})。唯一修改见 [noad.patch](../../blob/noad-ci/noad.patch)：过滤播放页「相关推荐」中服务器下发的广告项，并禁用应用内更新检查。
-
-安装：拖入 Applications 后如提示「无法验证开发者」，执行：
-\`\`\`
-xattr -dr com.apple.quarantine /Applications/Ani.app
-\`\`\`
-或直接用仓库里的 \`install-latest.sh\`（需 gh CLI）。
-
-依据 AGPL-3.0 分发；完整对应源码 = 上游 ${TAG} tag + 本仓库 noad.patch。"
+          {
+            echo "基于官方 [${TAG}](https://github.com/open-ani/animeko/releases/tag/${TAG})。唯一修改见 [noad.patch](https://github.com/${{ github.repository }}/blob/noad-ci/noad.patch)：过滤播放页「相关推荐」中服务器下发的广告项，并禁用应用内更新检查。"
+            echo ""
+            echo "安装：拖入 Applications；首次打开若提示「无法验证开发者」，执行 \`xattr -dr com.apple.quarantine /Applications/Ani.app\`，或直接用仓库里的 install-latest.sh（需 gh CLI）。"
+            echo ""
+            echo "依据 AGPL-3.0 分发；完整对应源码 = 上游 ${TAG} tag + 本仓库 noad.patch。"
+          } > notes.md
+          gh release create "${TAG}-noad" "$OUT" "$OUT.sha1" --title "Ani ${TAG} 去广告版 (macOS aarch64)" --notes-file notes.md
